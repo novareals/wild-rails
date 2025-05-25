@@ -113,7 +113,12 @@ class Game:
             x, y = -50, random.randint(0, SCREEN_HEIGHT)
         
         # Create zombie with stats scaled to current wave
-        max_hp = 20 + (self.wave * 15)
+        # Exponential health scaling that makes zombies much tougher in later waves
+        # Base health is 35 for wave 1 (same as original), then grows exponentially
+        if self.wave == 1:
+            max_hp = 35  # Keep original health for wave 1
+        else:
+            max_hp = int(35 * (1.25 ** (self.wave - 1)))  # 25% increase per wave
         zombie_rect = pygame.Rect(x, y, 48, 48)
         self.zombies.append([x, y, max_hp, max_hp, zombie_rect])
         self.zombies_spawned += 1
@@ -222,7 +227,12 @@ class Game:
         # Check wave completion - now endless
         if len(self.zombies) == 0 and self.zombies_spawned >= self.zombies_per_wave:
             self.wave += 1
-            self.zombies_per_wave += 2
+            # Multiplicative scaling for zombie spawn count
+            if self.wave == 2:
+                self.zombies_per_wave += 2  # Keep original increment for wave 2
+            else:
+                # Multiply by 1.3 for exponential growth in later waves
+                self.zombies_per_wave = int(self.zombies_per_wave * 1.3)
             self.zombies_spawned = 0
             self.spawn_timer = 0
     
