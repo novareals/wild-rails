@@ -20,8 +20,13 @@ COLORS = {
     'green': (0, 255, 0),
     'yellow': (255, 255, 0),
     'red': (255, 0, 0),
-    'black': (0, 0, 0)
+    'black': (0, 0, 0),
+    'white': (255, 255, 255),
+    'gold': (255, 215, 0)
 }
+
+# Currency system
+BONDS_PER_ZOMBIE = 10  # Bonds earned per zombie kill
 
 class Game:
     def __init__(self):
@@ -32,7 +37,7 @@ class Game:
         self.running = True
         
         # Game state
-        self.state = "waiting"  # "waiting", "playing", "game_over", "victory"
+        self.state = "menu"  # "menu", "playing", "game_over"
         
         # Player
         self.player_pos = [SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2]
@@ -44,8 +49,9 @@ class Game:
         self.projectiles = []  # [x, y, vel_x, vel_y, active]
         self.zombies = []      # [x, y, hp, max_hp, rect]
         
-        # Wave management
+        # Wave management and currency
         self.wave = 1
+        self.bonds = 0  # Initialize currency
         self.zombies_per_wave = 5
         self.zombies_spawned = 0
         self.spawn_timer = 0
@@ -75,6 +81,20 @@ class Game:
         # Fonts
         self.font = pygame.font.Font(None, 36)
         self.big_font = pygame.font.Font(None, 72)
+    
+    def reset_game(self):
+        """Reset game state for a new game"""
+        self.wave = 1
+        self.bonds = 0
+        self.zombies_per_wave = 5
+        self.zombies_spawned = 0
+        self.spawn_timer = 0
+        self.projectiles = []
+        self.zombies = []
+        self.player_pos = [SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2]
+        self.player_rect.x, self.player_rect.y = self.player_pos
+        self.attack_cooldown = 0
+        self.state = "playing"
     
     def spawn_zombie(self):
         """Create a zombie at a random edge of the screen"""
@@ -183,8 +203,9 @@ class Game:
                     self.projectiles.remove(proj)
                     break
             
-            # Remove dead zombies
+            # Remove dead zombies and award bonds
             if zombie[2] <= 0:
+                self.bonds += BONDS_PER_ZOMBIE  # Add bonds when zombie is killed
                 self.zombies.remove(zombie)
                 continue
             
@@ -198,93 +219,101 @@ class Game:
         if self.spawn_timer >= self.spawn_delay and self.zombies_spawned < self.zombies_per_wave:
             self.spawn_zombie()
         
-        # Check wave completion
+        # Check wave completion - now endless
         if len(self.zombies) == 0 and self.zombies_spawned >= self.zombies_per_wave:
-            if self.wave >= 10:
-                self.state = "victory"
-            else:
-                self.wave += 1
-                self.zombies_per_wave += 2
-                self.zombies_spawned = 0
-                self.spawn_timer = 0
+            self.wave += 1
+            self.zombies_per_wave += 2
+            self.zombies_spawned = 0
+            self.spawn_timer = 0
+    
+    def draw_menu(self):
+        """Draw the main menu screen"""
+        # Title
+        title = self.big_font.render("ZOMBIE SURVIVAL", True, COLORS['black'])
+        title_rect = title.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//3))
+        self.screen.blit(title, title_rect)
+        
+        # Menu options
+        texts = [
+            ("Press SPACE to Play", self.font, 50),
+            ("Press ESC to Quit", self.font, 100),
+            ("Survive endless waves of zombies!", self.font, 200),
+            ("Earn Bonds for each zombie killed", self.font, 250)
+        ]
+        
+        for text, font, y_offset in texts:
+            surf = font.render(text, True, COLORS['black'])
+            rect = surf.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2 + y_offset))
+            self.screen.blit(surf, rect)
+    
+    def draw_game(self):
+        """Draw the main gameplay screen"""
+        # Draw game objects
+        self.screen.blit(self.player_img, self.player_pos)
+        
+        # Draw active projectiles
+        for proj in self.projectiles:
+            if proj[4]:  # if active
+                pygame.draw.circle(self.screen, COLORS['yellow'], 
+                                 (int(proj[0]), int(proj[1])), 6)
+        
+        # Draw zombies with health bars
+        for zombie in self.zombies:
+            self.screen.blit(self.zombie_img, (int(zombie[0]), int(zombie[1])))
+            
+            # Health bar
+            bar_width = 48
+            pygame.draw.rect(self.screen, COLORS['red'],
+                           (zombie[0], zombie[1] - 10, bar_width, 6))
+            health_width = int((zombie[2] / zombie[3]) * bar_width)
+            pygame.draw.rect(self.screen, COLORS['green'],
+                           (zombie[0], zombie[1] - 10, health_width, 6))
+        
+        # Draw UI
+        texts = [
+            (f"Wave: {self.wave}", COLORS['black']),
+            (f"Bonds: {self.bonds}", COLORS['gold']),
+            (f"Zombies: {len(self.zombies)}", COLORS['black']),
+            (f"{'READY TO FIRE' if self.attack_cooldown <= 0 else f'Cooldown: {self.attack_cooldown/60:.1f}s'}", 
+             COLORS['green'] if self.attack_cooldown <= 0 else COLORS['red'])
+        ]
+        
+        for i, (text, color) in enumerate(texts):
+            surf = self.font.render(text, True, color)
+            self.screen.blit(surf, (10, 10 + i * 40))
+        
+        # Draw crosshair at mouse position
+        mouse_x, mouse_y = pygame.mouse.get_pos()
+        pygame.draw.line(self.screen, COLORS['red'],
+                       (mouse_x - 10, mouse_y), (mouse_x + 10, mouse_y), 2)
+        pygame.draw.line(self.screen, COLORS['red'],
+                       (mouse_x, mouse_y - 10), (mouse_x, mouse_y + 10), 2)
+    
+    def draw_game_over(self):
+        """Draw the game over screen with statistics"""
+        texts = [
+            ("GAME OVER", self.big_font, COLORS['red'], -100),
+            (f"Wave Reached: {self.wave}", self.font, COLORS['black'], 0),
+            (f"Bonds Earned: {self.bonds}", self.font, COLORS['gold'], 50),
+            ("Press SPACE to return to Menu", self.font, COLORS['black'], 150),
+            ("Press ESC to Quit", self.font, COLORS['black'], 200)
+        ]
+        
+        for text, font, color, y_offset in texts:
+            surf = font.render(text, True, color)
+            rect = surf.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2 + y_offset))
+            self.screen.blit(surf, rect)
     
     def draw(self):
-        """Render the game state to the screen"""
+        """Render the current game state"""
         self.screen.fill(COLORS['sand'])
         
-        if self.state == "playing":
-            # Draw game objects
-            self.screen.blit(self.player_img, self.player_pos)
-            
-            # Draw active projectiles
-            for proj in self.projectiles:
-                if proj[4]:  # if active
-                    pygame.draw.circle(self.screen, COLORS['yellow'], 
-                                     (int(proj[0]), int(proj[1])), 6)
-            
-            # Draw zombies with health bars
-            for zombie in self.zombies:
-                self.screen.blit(self.zombie_img, (int(zombie[0]), int(zombie[1])))
-                
-                # Health bar
-                bar_width = 48
-                pygame.draw.rect(self.screen, COLORS['red'],
-                               (zombie[0], zombie[1] - 10, bar_width, 6))
-                health_width = int((zombie[2] / zombie[3]) * bar_width)
-                pygame.draw.rect(self.screen, COLORS['green'],
-                               (zombie[0], zombie[1] - 10, health_width, 6))
-            
-            # Draw UI
-            texts = [
-                (f"Wave: {self.wave}/10", COLORS['black']),
-                (f"Zombies: {len(self.zombies)}", COLORS['black']),
-                (f"{'READY TO FIRE' if self.attack_cooldown <= 0 else f'Cooldown: {self.attack_cooldown/60:.1f}s'}", 
-                 COLORS['green'] if self.attack_cooldown <= 0 else COLORS['red'])
-            ]
-            
-            for i, (text, color) in enumerate(texts):
-                surf = self.font.render(text, True, color)
-                self.screen.blit(surf, (10, 10 + i * 40))
-            
-            # Draw crosshair at mouse position
-            mouse_x, mouse_y = pygame.mouse.get_pos()
-            pygame.draw.line(self.screen, COLORS['red'],
-                           (mouse_x - 10, mouse_y), (mouse_x + 10, mouse_y), 2)
-            pygame.draw.line(self.screen, COLORS['red'],
-                           (mouse_x, mouse_y - 10), (mouse_x, mouse_y + 10), 2)
-        
-        elif self.state == "waiting":
-            texts = [
-                ("ZOMBIE SURVIVAL", self.big_font, -100),
-                ("Press SPACE to start Wave 1", self.font, -50),
-                ("WASD - Move Torcher", self.font, 20),
-                ("SPACE - Shoot yellow projectile at cursor", self.font, 50),
-                ("Survive 10 waves to win!", self.font, 80)
-            ]
-            for text, font, y_offset in texts:
-                surf = font.render(text, True, COLORS['black'])
-                rect = surf.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2 + y_offset))
-                self.screen.blit(surf, rect)
-        
+        if self.state == "menu":
+            self.draw_menu()
+        elif self.state == "playing":
+            self.draw_game()
         elif self.state == "game_over":
-            texts = [
-                ("GAME OVER", self.big_font, COLORS['red'], 0),
-                ("Press ESC to quit", self.font, COLORS['black'], 50)
-            ]
-            for text, font, color, y_offset in texts:
-                surf = font.render(text, True, color)
-                rect = surf.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2 + y_offset))
-                self.screen.blit(surf, rect)
-        
-        elif self.state == "victory":
-            texts = [
-                ("VICTORY!", self.big_font, COLORS['green'], 0),
-                ("You survived all 10 waves!", self.font, COLORS['black'], 50)
-            ]
-            for text, font, color, y_offset in texts:
-                surf = font.render(text, True, color)
-                rect = surf.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2 + y_offset))
-                self.screen.blit(surf, rect)
+            self.draw_game_over()
         
         pygame.display.flip()
     
@@ -297,10 +326,15 @@ class Game:
                     self.running = False
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
-                        self.running = False
+                        if self.state == "playing":
+                            self.state = "menu"
+                        else:
+                            self.running = False
                     elif event.key == pygame.K_SPACE:
-                        if self.state == "waiting":
-                            self.state = "playing"
+                        if self.state == "menu":
+                            self.reset_game()
+                        elif self.state == "game_over":
+                            self.state = "menu"
                         elif self.state == "playing":
                             self.shoot()
             
@@ -317,8 +351,8 @@ if __name__ == "__main__":
     print("Controls:")
     print("- WASD: Move Torcher")
     print("- SPACE: Shoot projectile at mouse cursor")
-    print("- ESC: Quit game")
-    print("\nObjective: Survive 10 waves of zombies!")
+    print("- ESC: Return to menu/Quit")
+    print("\nObjective: Survive endless waves and collect Bonds!")
     print("Starting game...")
     
     Game().run()
