@@ -1,6 +1,5 @@
 import pygame
 import sys
-import os
 import math
 import random
 
@@ -8,8 +7,7 @@ import random
 pygame.init()
 
 # Constants
-SCREEN_WIDTH = 1024
-SCREEN_HEIGHT = 768
+SCREEN_WIDTH, SCREEN_HEIGHT = 1024, 768
 FPS = 60
 PLAYER_SPEED = 1.5
 PROJECTILE_SPEED = 8
@@ -17,426 +15,295 @@ PROJECTILE_DAMAGE = 10
 ZOMBIE_SPEED = 0.8
 
 # Colors
-DESERT_SAND = (238, 203, 173)
-DARKER_SAND = (205, 175, 149)
-CACTUS_GREEN = (34, 139, 34)
-SKY_BLUE = (135, 206, 235)
-YELLOW = (255, 255, 0)
-RED = (255, 0, 0)
-WHITE = (255, 255, 255)
-BLACK = (0, 0, 0)
-
-class Projectile:
-    def __init__(self, start_x, start_y, target_x, target_y):
-        self.x = start_x
-        self.y = start_y
-        self.radius = 6
-        
-        # Calculate direction to target
-        dx = target_x - start_x
-        dy = target_y - start_y
-        distance = math.sqrt(dx*dx + dy*dy)
-        
-        if distance > 0:
-            self.vel_x = (dx / distance) * PROJECTILE_SPEED
-            self.vel_y = (dy / distance) * PROJECTILE_SPEED
-        else:
-            self.vel_x = 0
-            self.vel_y = 0
-        
-        self.active = True
-    
-    def update(self):
-        self.x += self.vel_x
-        self.y += self.vel_y
-        
-        # Remove if off screen
-        if (self.x < 0 or self.x > SCREEN_WIDTH or 
-            self.y < 0 or self.y > SCREEN_HEIGHT):
-            self.active = False
-    
-    def draw(self, screen):
-        if self.active:
-            pygame.draw.circle(screen, YELLOW, (int(self.x), int(self.y)), self.radius)
-            pygame.draw.circle(screen, (255, 255, 150), (int(self.x), int(self.y)), self.radius - 2)
-
-class Zombie:
-    def __init__(self, x, y, wave):
-        self.x = x
-        self.y = y
-        self.max_hp = 20 + (wave * 15)  # HP increases with each wave
-        self.hp = self.max_hp
-        self.speed = ZOMBIE_SPEED
-        self.width = 48
-        self.height = 48
-        
-        # Try to load zombie image
-        try:
-            self.image = pygame.image.load("Wild Rails/Zombie.png")
-            self.image = pygame.transform.scale(self.image, (self.width, self.height))
-        except (pygame.error, FileNotFoundError):
-            # Green placeholder if image not found
-            self.image = pygame.Surface((self.width, self.height))
-            self.image.fill((0, 150, 0))
-        
-        self.rect = pygame.Rect(self.x, self.y, self.width, self.height)
-        self.alive = True
-    
-    def update(self, player_x, player_y):
-        if not self.alive:
-            return
-        
-        # Move towards player
-        dx = player_x - self.x
-        dy = player_y - self.y
-        distance = math.sqrt(dx*dx + dy*dy)
-        
-        if distance > 0:
-            self.x += (dx / distance) * self.speed
-            self.y += (dy / distance) * self.speed
-        
-        self.rect.x = int(self.x)
-        self.rect.y = int(self.y)
-    
-    def take_damage(self, damage):
-        self.hp -= damage
-        if self.hp <= 0:
-            self.alive = False
-    
-    def draw(self, screen):
-        if self.alive:
-            screen.blit(self.image, (int(self.x), int(self.y)))
-            
-            # Draw health bar
-            bar_width = self.width
-            bar_height = 6
-            bar_x = int(self.x)
-            bar_y = int(self.y) - 10
-            
-            # Background (red)
-            pygame.draw.rect(screen, RED, (bar_x, bar_y, bar_width, bar_height))
-            # Health (green)
-            health_width = int((self.hp / self.max_hp) * bar_width)
-            pygame.draw.rect(screen, (0, 255, 0), (bar_x, bar_y, health_width, bar_height))
-
-class Player:
-    def __init__(self, x, y):
-        self.x = x
-        self.y = y
-        self.speed = PLAYER_SPEED
-        self.width = 64
-        self.height = 64
-        
-        # Try to load the Torcher image, fallback to placeholder
-        try:
-            self.image = pygame.image.load("Wild Rails/Torcher.png")
-            self.image = pygame.transform.scale(self.image, (self.width, self.height))
-        except (pygame.error, FileNotFoundError):
-            # Create a placeholder if image not found
-            self.image = pygame.Surface((self.width, self.height))
-            self.image.fill((255, 100, 100))  # Red rectangle as placeholder
-            
-        self.rect = pygame.Rect(self.x, self.y, self.width, self.height)
-    
-    def handle_input(self, keys):
-        # WASD movement
-        if keys[pygame.K_w] or keys[pygame.K_UP]:
-            self.y -= self.speed
-        if keys[pygame.K_s] or keys[pygame.K_DOWN]:
-            self.y += self.speed
-        if keys[pygame.K_a] or keys[pygame.K_LEFT]:
-            self.x -= self.speed
-        if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
-            self.x += self.speed
-        
-        # Keep player on screen
-        self.x = max(0, min(self.x, SCREEN_WIDTH - self.width))
-        self.y = max(0, min(self.y, SCREEN_HEIGHT - self.height))
-        
-        # Update rect position
-        self.rect.x = int(self.x)
-        self.rect.y = int(self.y)
-    
-    def get_center(self):
-        return (self.x + self.width // 2, self.y + self.height // 2)
-    
-    def draw(self, screen):
-        screen.blit(self.image, (int(self.x), int(self.y)))
-
-class WaveManager:
-    def __init__(self):
-        self.current_wave = 1
-        self.zombies_per_wave = 5
-        self.wave_active = False
-        self.zombies_spawned = 0
-        self.spawn_timer = 0
-        self.spawn_delay = 120  # 2 seconds at 60 FPS
-        
-    def start_wave(self):
-        self.wave_active = True
-        self.zombies_spawned = 0
-        self.spawn_timer = 0
-        
-    def spawn_zombie(self, zombies_list):
-        if self.zombies_spawned < self.zombies_per_wave:
-            # Spawn from random edge
-            side = random.randint(0, 3)
-            if side == 0:  # Top
-                x = random.randint(0, SCREEN_WIDTH)
-                y = -50
-            elif side == 1:  # Right
-                x = SCREEN_WIDTH + 50
-                y = random.randint(0, SCREEN_HEIGHT)
-            elif side == 2:  # Bottom
-                x = random.randint(0, SCREEN_WIDTH)
-                y = SCREEN_HEIGHT + 50
-            else:  # Left
-                x = -50
-                y = random.randint(0, SCREEN_HEIGHT)
-            
-            zombie = Zombie(x, y, self.current_wave)
-            zombies_list.append(zombie)
-            self.zombies_spawned += 1
-            self.spawn_timer = 0
-    
-    def update(self, zombies_list):
-        if self.wave_active:
-            self.spawn_timer += 1
-            if self.spawn_timer >= self.spawn_delay and self.zombies_spawned < self.zombies_per_wave:
-                self.spawn_zombie(zombies_list)
-            
-            # Check if wave is complete
-            alive_zombies = [z for z in zombies_list if z.alive]
-            if self.zombies_spawned >= self.zombies_per_wave and len(alive_zombies) == 0:
-                self.wave_active = False
-                if self.current_wave < 10:
-                    self.current_wave += 1
-                    self.zombies_per_wave += 2  # More zombies each wave
-                return True  # Wave completed
-        
-        return False  # Wave not completed
-
-class DesertEnvironment:
-    def __init__(self):
-        self.cacti = []
-        self.rocks = []
-        self.generate_environment()
-    
-    def generate_environment(self):
-        # Generate some cacti
-        for _ in range(15):
-            x = random.randint(0, SCREEN_WIDTH - 20)
-            y = random.randint(0, SCREEN_HEIGHT - 40)
-            self.cacti.append({'x': x, 'y': y, 'height': random.randint(20, 40)})
-        
-        # Generate some rocks
-        for _ in range(25):
-            x = random.randint(0, SCREEN_WIDTH - 15)
-            y = random.randint(0, SCREEN_HEIGHT - 15)
-            size = random.randint(8, 20)
-            self.rocks.append({'x': x, 'y': y, 'size': size})
-    
-    def draw(self, screen):
-        # Draw desert floor texture
-        for x in range(0, SCREEN_WIDTH, 50):
-            for y in range(0, SCREEN_HEIGHT, 50):
-                # Add some variation to the sand
-                if (x + y) % 100 == 0:
-                    pygame.draw.circle(screen, DARKER_SAND, (x + 25, y + 25), 20)
-        
-        # Draw rocks
-        for rock in self.rocks:
-            pygame.draw.circle(screen, (139, 69, 19), (rock['x'], rock['y']), rock['size'])
-            pygame.draw.circle(screen, (160, 82, 45), (rock['x'], rock['y']), rock['size'] - 2)
-        
-        # Draw cacti
-        for cactus in self.cacti:
-            # Cactus body
-            pygame.draw.rect(screen, CACTUS_GREEN, 
-                           (cactus['x'], cactus['y'], 15, cactus['height']))
-            # Cactus arms
-            pygame.draw.rect(screen, CACTUS_GREEN, 
-                           (cactus['x'] - 8, cactus['y'] + cactus['height']//3, 8, 15))
-            pygame.draw.rect(screen, CACTUS_GREEN, 
-                           (cactus['x'] + 15, cactus['y'] + cactus['height']//2, 8, 12))
+COLORS = {
+    'sand': (238, 203, 173),
+    'green': (0, 255, 0),
+    'yellow': (255, 255, 0),
+    'red': (255, 0, 0),
+    'black': (0, 0, 0)
+}
 
 class Game:
     def __init__(self):
+        # Setup display
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
         pygame.display.set_caption("Wild Rails - Zombie Survival")
         self.clock = pygame.time.Clock()
         self.running = True
         
-        # Initialize game objects
-        self.player = Player(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
-        self.environment = DesertEnvironment()
-        self.wave_manager = WaveManager()
-        self.projectiles = []
-        self.zombies = []
-        
         # Game state
-        self.game_state = "waiting"  # "waiting", "playing", "game_over", "victory"
+        self.state = "waiting"  # "waiting", "playing", "game_over", "victory"
         
-        # Attack cooldown system
+        # Player
+        self.player_pos = [SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2]
+        self.player_size = 64
+        self.player_rect = pygame.Rect(self.player_pos[0], self.player_pos[1], 
+                                     self.player_size, self.player_size)
+        
+        # Game objects
+        self.projectiles = []  # [x, y, vel_x, vel_y, active]
+        self.zombies = []      # [x, y, hp, max_hp, rect]
+        
+        # Wave management
+        self.wave = 1
+        self.zombies_per_wave = 5
+        self.zombies_spawned = 0
+        self.spawn_timer = 0
+        self.spawn_delay = 120  # 2 seconds at 60 FPS
+        
+        # Attack cooldown
         self.attack_cooldown = 0
-        self.max_attack_cooldown = 60  # 1 second at 60 FPS
+        self.max_cooldown = 60  # 1 second at 60 FPS
+        
+        # Load assets
+        try:
+            self.player_img = pygame.transform.scale(
+                pygame.image.load("Wild Rails/Torcher.png"),
+                (self.player_size, self.player_size)
+            )
+            self.zombie_img = pygame.transform.scale(
+                pygame.image.load("Wild Rails/Zombie.png"),
+                (48, 48)
+            )
+        except (pygame.error, FileNotFoundError):
+            # Fallback to basic colored shapes
+            self.player_img = pygame.Surface((self.player_size, self.player_size))
+            self.player_img.fill((255, 100, 100))
+            self.zombie_img = pygame.Surface((48, 48))
+            self.zombie_img.fill((0, 150, 0))
         
         # Fonts
         self.font = pygame.font.Font(None, 36)
         self.big_font = pygame.font.Font(None, 72)
     
-    def handle_events(self):
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                self.running = False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    self.running = False
-                elif event.key == pygame.K_SPACE:
-                    if self.game_state == "waiting":
-                        self.game_state = "playing"
-                        self.wave_manager.start_wave()
-                    elif self.game_state == "playing" and self.attack_cooldown <= 0:
-                        self.shoot_projectile()
-                        self.attack_cooldown = self.max_attack_cooldown  # Start cooldown
+    def spawn_zombie(self):
+        """Create a zombie at a random edge of the screen"""
+        if self.zombies_spawned >= self.zombies_per_wave:
+            return
+        
+        # Randomly select an edge to spawn from
+        side = random.randint(0, 3)
+        if side == 0:  # Top
+            x, y = random.randint(0, SCREEN_WIDTH), -50
+        elif side == 1:  # Right
+            x, y = SCREEN_WIDTH + 50, random.randint(0, SCREEN_HEIGHT)
+        elif side == 2:  # Bottom
+            x, y = random.randint(0, SCREEN_WIDTH), SCREEN_HEIGHT + 50
+        else:  # Left
+            x, y = -50, random.randint(0, SCREEN_HEIGHT)
+        
+        # Create zombie with stats scaled to current wave
+        max_hp = 20 + (self.wave * 15)
+        zombie_rect = pygame.Rect(x, y, 48, 48)
+        self.zombies.append([x, y, max_hp, max_hp, zombie_rect])
+        self.zombies_spawned += 1
+        self.spawn_timer = 0
     
-    def shoot_projectile(self):
-        mouse_x, mouse_y = pygame.mouse.get_pos()
-        player_center = self.player.get_center()
-        projectile = Projectile(player_center[0], player_center[1], mouse_x, mouse_y)
-        self.projectiles.append(projectile)
+    def shoot(self):
+        """Create a projectile aimed at the mouse cursor"""
+        if self.attack_cooldown <= 0:
+            # Get player center and mouse position
+            player_center = (self.player_pos[0] + self.player_size // 2, 
+                           self.player_pos[1] + self.player_size // 2)
+            mouse_x, mouse_y = pygame.mouse.get_pos()
+            
+            # Calculate direction vector
+            dx = mouse_x - player_center[0]
+            dy = mouse_y - player_center[1]
+            distance = math.sqrt(dx*dx + dy*dy)
+            
+            if distance > 0:
+                vel_x = (dx / distance) * PROJECTILE_SPEED
+                vel_y = (dy / distance) * PROJECTILE_SPEED
+                
+                # Store projectile as [x, y, vel_x, vel_y, active]
+                self.projectiles.append([
+                    player_center[0], player_center[1], 
+                    vel_x, vel_y, True
+                ])
+                self.attack_cooldown = self.max_cooldown
     
     def update(self):
-        if self.game_state == "playing":
-            # Update attack cooldown
-            if self.attack_cooldown > 0:
-                self.attack_cooldown -= 1
-                
-            keys = pygame.key.get_pressed()
-            self.player.handle_input(keys)
+        """Update game state for one frame"""
+        if self.state != "playing":
+            return
+        
+        # Update cooldown
+        if self.attack_cooldown > 0:
+            self.attack_cooldown -= 1
+        
+        # Update player position based on keyboard input
+        keys = pygame.key.get_pressed()
+        if keys[pygame.K_w] or keys[pygame.K_UP]:
+            self.player_pos[1] -= PLAYER_SPEED
+        if keys[pygame.K_s] or keys[pygame.K_DOWN]:
+            self.player_pos[1] += PLAYER_SPEED
+        if keys[pygame.K_a] or keys[pygame.K_LEFT]:
+            self.player_pos[0] -= PLAYER_SPEED
+        if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
+            self.player_pos[0] += PLAYER_SPEED
+        
+        # Keep player on screen
+        self.player_pos[0] = max(0, min(self.player_pos[0], SCREEN_WIDTH - self.player_size))
+        self.player_pos[1] = max(0, min(self.player_pos[1], SCREEN_HEIGHT - self.player_size))
+        self.player_rect.x, self.player_rect.y = self.player_pos
+        
+        # Update projectiles
+        for proj in self.projectiles[:]:
+            # Move projectile
+            proj[0] += proj[2]  # x += vel_x
+            proj[1] += proj[3]  # y += vel_y
             
-            # Update projectiles
-            for projectile in self.projectiles[:]:
-                projectile.update()
-                if not projectile.active:
-                    self.projectiles.remove(projectile)
+            # Deactivate if off screen
+            if (proj[0] < 0 or proj[0] > SCREEN_WIDTH or 
+                proj[1] < 0 or proj[1] > SCREEN_HEIGHT):
+                proj[4] = False
+                self.projectiles.remove(proj)
+        
+        # Update zombies and check collisions
+        for zombie in self.zombies[:]:
+            # Move zombie towards player
+            player_center = (self.player_pos[0] + self.player_size // 2, 
+                           self.player_pos[1] + self.player_size // 2)
+            dx = player_center[0] - zombie[0]
+            dy = player_center[1] - zombie[1]
+            distance = math.sqrt(dx*dx + dy*dy)
             
-            # Update zombies
-            player_center = self.player.get_center()
-            for zombie in self.zombies:
-                zombie.update(player_center[0], player_center[1])
+            if distance > 0:
+                zombie[0] += (dx / distance) * ZOMBIE_SPEED
+                zombie[1] += (dy / distance) * ZOMBIE_SPEED
+                zombie[4].x = int(zombie[0])
+                zombie[4].y = int(zombie[1])
             
-            # Check projectile-zombie collisions
-            for projectile in self.projectiles[:]:
-                for zombie in self.zombies[:]:
-                    if (zombie.alive and projectile.active and
-                        zombie.rect.collidepoint(int(projectile.x), int(projectile.y))):
-                        zombie.take_damage(PROJECTILE_DAMAGE)
-                        projectile.active = False
-                        self.projectiles.remove(projectile)
-                        break
+            # Check projectile hits
+            for proj in self.projectiles[:]:
+                if proj[4] and zombie[4].collidepoint(proj[0], proj[1]):
+                    zombie[2] -= PROJECTILE_DAMAGE
+                    proj[4] = False
+                    self.projectiles.remove(proj)
+                    break
             
             # Remove dead zombies
-            self.zombies = [z for z in self.zombies if z.alive]
+            if zombie[2] <= 0:
+                self.zombies.remove(zombie)
+                continue
             
-            # Check player-zombie collisions
-            for zombie in self.zombies:
-                if zombie.alive and self.player.rect.colliderect(zombie.rect):
-                    self.game_state = "game_over"
-            
-            # Update wave manager
-            wave_completed = self.wave_manager.update(self.zombies)
-            if wave_completed and self.wave_manager.current_wave > 10:
-                self.game_state = "victory"
-            elif wave_completed:
-                # Brief pause between waves, then start next wave
-                pygame.time.wait(1000)
-                self.wave_manager.start_wave()
+            # Check player collision (game over if zombie touches player)
+            if zombie[4].colliderect(self.player_rect):
+                self.state = "game_over"
+                return
+        
+        # Spawn new zombies
+        self.spawn_timer += 1
+        if self.spawn_timer >= self.spawn_delay and self.zombies_spawned < self.zombies_per_wave:
+            self.spawn_zombie()
+        
+        # Check wave completion
+        if len(self.zombies) == 0 and self.zombies_spawned >= self.zombies_per_wave:
+            if self.wave >= 10:
+                self.state = "victory"
+            else:
+                self.wave += 1
+                self.zombies_per_wave += 2
+                self.zombies_spawned = 0
+                self.spawn_timer = 0
     
     def draw(self):
-        # Clear screen with desert background
-        self.screen.fill(DESERT_SAND)
+        """Render the game state to the screen"""
+        self.screen.fill(COLORS['sand'])
         
-        # Draw environment
-        self.environment.draw(self.screen)
-        
-        if self.game_state == "playing":
+        if self.state == "playing":
             # Draw game objects
-            self.player.draw(self.screen)
+            self.screen.blit(self.player_img, self.player_pos)
             
+            # Draw active projectiles
+            for proj in self.projectiles:
+                if proj[4]:  # if active
+                    pygame.draw.circle(self.screen, COLORS['yellow'], 
+                                     (int(proj[0]), int(proj[1])), 6)
+            
+            # Draw zombies with health bars
             for zombie in self.zombies:
-                zombie.draw(self.screen)
-            
-            for projectile in self.projectiles:
-                projectile.draw(self.screen)
+                self.screen.blit(self.zombie_img, (int(zombie[0]), int(zombie[1])))
+                
+                # Health bar
+                bar_width = 48
+                pygame.draw.rect(self.screen, COLORS['red'],
+                               (zombie[0], zombie[1] - 10, bar_width, 6))
+                health_width = int((zombie[2] / zombie[3]) * bar_width)
+                pygame.draw.rect(self.screen, COLORS['green'],
+                               (zombie[0], zombie[1] - 10, health_width, 6))
             
             # Draw UI
-            wave_text = self.font.render(f"Wave: {self.wave_manager.current_wave}/10", True, BLACK)
-            self.screen.blit(wave_text, (10, 10))
+            texts = [
+                (f"Wave: {self.wave}/10", COLORS['black']),
+                (f"Zombies: {len(self.zombies)}", COLORS['black']),
+                (f"{'READY TO FIRE' if self.attack_cooldown <= 0 else f'Cooldown: {self.attack_cooldown/60:.1f}s'}", 
+                 COLORS['green'] if self.attack_cooldown <= 0 else COLORS['red'])
+            ]
             
-            zombies_left = len([z for z in self.zombies if z.alive])
-            zombies_text = self.font.render(f"Zombies: {zombies_left}", True, BLACK)
-            self.screen.blit(zombies_text, (10, 50))
-            
-            # Draw attack cooldown indicator
-            if self.attack_cooldown > 0:
-                cooldown_text = self.font.render(f"Cooldown: {self.attack_cooldown/60:.1f}s", True, RED)
-                self.screen.blit(cooldown_text, (10, 90))
-            else:
-                ready_text = self.font.render("READY TO FIRE", True, (0, 255, 0))
-                self.screen.blit(ready_text, (10, 90))
+            for i, (text, color) in enumerate(texts):
+                surf = self.font.render(text, True, color)
+                self.screen.blit(surf, (10, 10 + i * 40))
             
             # Draw crosshair at mouse position
             mouse_x, mouse_y = pygame.mouse.get_pos()
-            pygame.draw.line(self.screen, RED, (mouse_x - 10, mouse_y), (mouse_x + 10, mouse_y), 2)
-            pygame.draw.line(self.screen, RED, (mouse_x, mouse_y - 10), (mouse_x, mouse_y + 10), 2)
-            
-        elif self.game_state == "waiting":
-            title_text = self.big_font.render("ZOMBIE SURVIVAL", True, BLACK)
-            start_text = self.font.render("Press SPACE to start Wave 1", True, BLACK)
-            controls_text = [
-                "WASD - Move Torcher",
-                "SPACE - Shoot yellow projectile at cursor",
-                "Survive 10 waves to win!"
+            pygame.draw.line(self.screen, COLORS['red'],
+                           (mouse_x - 10, mouse_y), (mouse_x + 10, mouse_y), 2)
+            pygame.draw.line(self.screen, COLORS['red'],
+                           (mouse_x, mouse_y - 10), (mouse_x, mouse_y + 10), 2)
+        
+        elif self.state == "waiting":
+            texts = [
+                ("ZOMBIE SURVIVAL", self.big_font, -100),
+                ("Press SPACE to start Wave 1", self.font, -50),
+                ("WASD - Move Torcher", self.font, 20),
+                ("SPACE - Shoot yellow projectile at cursor", self.font, 50),
+                ("Survive 10 waves to win!", self.font, 80)
             ]
-            
-            title_rect = title_text.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2 - 100))
-            start_rect = start_text.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2 - 50))
-            
-            self.screen.blit(title_text, title_rect)
-            self.screen.blit(start_text, start_rect)
-            
-            for i, control in enumerate(controls_text):
-                text = self.font.render(control, True, BLACK)
-                text_rect = text.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2 + 20 + i*30))
-                self.screen.blit(text, text_rect)
+            for text, font, y_offset in texts:
+                surf = font.render(text, True, COLORS['black'])
+                rect = surf.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2 + y_offset))
+                self.screen.blit(surf, rect)
         
-        elif self.game_state == "game_over":
-            game_over_text = self.big_font.render("GAME OVER", True, RED)
-            restart_text = self.font.render("Press ESC to quit", True, BLACK)
-            
-            game_over_rect = game_over_text.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2))
-            restart_rect = restart_text.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2 + 50))
-            
-            self.screen.blit(game_over_text, game_over_rect)
-            self.screen.blit(restart_text, restart_rect)
+        elif self.state == "game_over":
+            texts = [
+                ("GAME OVER", self.big_font, COLORS['red'], 0),
+                ("Press ESC to quit", self.font, COLORS['black'], 50)
+            ]
+            for text, font, color, y_offset in texts:
+                surf = font.render(text, True, color)
+                rect = surf.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2 + y_offset))
+                self.screen.blit(surf, rect)
         
-        elif self.game_state == "victory":
-            victory_text = self.big_font.render("VICTORY!", True, (0, 255, 0))
-            congrats_text = self.font.render("You survived all 10 waves!", True, BLACK)
-            
-            victory_rect = victory_text.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2))
-            congrats_rect = congrats_text.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2 + 50))
-            
-            self.screen.blit(victory_text, victory_rect)
-            self.screen.blit(congrats_text, congrats_rect)
+        elif self.state == "victory":
+            texts = [
+                ("VICTORY!", self.big_font, COLORS['green'], 0),
+                ("You survived all 10 waves!", self.font, COLORS['black'], 50)
+            ]
+            for text, font, color, y_offset in texts:
+                surf = font.render(text, True, color)
+                rect = surf.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2 + y_offset))
+                self.screen.blit(surf, rect)
         
-        # Update display
         pygame.display.flip()
     
     def run(self):
+        """Main game loop"""
         while self.running:
-            self.handle_events()
+            # Handle events
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    self.running = False
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        self.running = False
+                    elif event.key == pygame.K_SPACE:
+                        if self.state == "waiting":
+                            self.state = "playing"
+                        elif self.state == "playing":
+                            self.shoot()
+            
             self.update()
             self.draw()
             self.clock.tick(FPS)
@@ -444,19 +311,14 @@ class Game:
         pygame.quit()
         sys.exit()
 
-# Run the game
 if __name__ == "__main__":
     print("Wild Rails - Zombie Survival")
     print("=" * 30)
-    print("Images needed:")
-    print("- Wild Rails/Torcher.png (player)")
-    print("- Wild Rails/Zombie.png (enemies)")
-    print("\nControls:")
+    print("Controls:")
     print("- WASD: Move Torcher")
     print("- SPACE: Shoot projectile at mouse cursor")
     print("- ESC: Quit game")
     print("\nObjective: Survive 10 waves of zombies!")
     print("Starting game...")
     
-    game = Game()
-    game.run()
+    Game().run()
