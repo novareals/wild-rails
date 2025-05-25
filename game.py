@@ -3,9 +3,11 @@ import sys
 import math
 import random
 import os
+import json
 
-# Initialize Pygame
+# Initialize Pygame and audio
 pygame.init()
+pygame.mixer.init()
 
 # Constants
 SCREEN_WIDTH, SCREEN_HEIGHT = 1024, 768
@@ -14,6 +16,7 @@ PLAYER_SPEED = 1.5
 PROJECTILE_SPEED = 8
 PROJECTILE_DAMAGE = 10
 ZOMBIE_SPEED = 0.8
+MAX_INVENTORY = 4  # Maximum number of characters in inventory
 
 # Rarity system
 RARITIES = {
@@ -165,7 +168,8 @@ COLORS = {
     'gold': (255, 215, 0),
     'purple': (138, 43, 226),
     'orange': (255, 165, 0),
-    'pink': (255, 0, 255)
+    'pink': (255, 0, 255),
+    'blue': (30, 144, 255)
 }
 
 # Currency system
@@ -178,6 +182,17 @@ class Game:
         pygame.display.set_caption("Wild Rails - Zombie Survival")
         self.clock = pygame.time.Clock()
         self.running = True
+        self.save_button_rect = pygame.Rect(SCREEN_WIDTH//2 - 100, SCREEN_HEIGHT//2 + 200, 200, 40)
+        self.load_button_rect = pygame.Rect(SCREEN_WIDTH//2 - 100, SCREEN_HEIGHT//2 + 250, 200, 40)
+        
+        # Load sounds
+        self.background_music = pygame.mixer.Sound(os.path.join(os.path.dirname(os.path.abspath(__file__)), 
+                                                  "Wild Rails", "o-bom-o-mal-e-o-feio-velho-oeste-desafio-dont-talk-duelo-desafio-armas.mp3"))
+        self.shoot_sound = pygame.mixer.Sound(os.path.join(os.path.dirname(os.path.abspath(__file__)), 
+                                             "Wild Rails", "westernsilah-online-audio-converter.mp3"))
+        
+        # Set background music to loop forever
+        self.background_music.play(-1)  # -1 means loop indefinitely
         
         # Game state
         self.state = "menu"  # "menu", "playing", "game_over", "shop"
@@ -192,10 +207,17 @@ class Game:
         self.owned_characters = ["Torcher"]  # Start with only Torcher
         self.selected_character = "Torcher"  # Default character
         
-        # Shop restock system
+        # Shop system
         self.restock_timer = 0
         self.restock_interval = 5 * 60 * FPS  # 5 minutes in frames (at 60 FPS)
         self.available_characters = []
+        self.shop_clickable_areas = {}  # Track clickable areas for characters
+        self.shop_hover = None  # Track which character is being hovered
+        
+        # Load saved game data if available
+        self.load_game()
+        
+        # Initialize shop
         self.restock_shop()  # Initial shop stock
         
         # Game objects
@@ -204,7 +226,8 @@ class Game:
         
         # Wave management and currency
         self.wave = 1
-        self.bonds = 0  # Initialize currency
+        self.match_bonds = 0  # Bonds earned in current match
+        self.permanent_bonds = 0  # Total bonds across all matches
         self.zombies_per_wave = 5
         self.zombies_spawned = 0
         self.spawn_timer = 0
@@ -396,6 +419,45 @@ class Game:
         self.font = pygame.font.Font(None, 36)
         self.big_font = pygame.font.Font(None, 72)
     
+    def save_game(self):
+        """Save game data to Wild Rails/Settings.json"""
+        save_data = {
+            "permanent_bonds": self.permanent_bonds,
+            "owned_characters": self.owned_characters,
+            "selected_character": self.selected_character
+        }
+        try:
+            settings_path = os.path.join(self.image_folder, "Settings.json")
+            with open(settings_path, "w") as f:
+                json.dump(save_data, f, indent=4)
+            print("Game saved successfully to Wild Rails/Settings.json")
+            return True
+        except Exception as e:
+            print(f"Error saving game: {e}")
+            return False
+    
+    def load_game(self):
+        """Load game data from Wild Rails/Settings.json"""
+        try:
+            settings_path = os.path.join(self.image_folder, "Settings.json")
+            with open(settings_path, "r") as f:
+                data = json.load(f)
+                self.permanent_bonds = data.get("permanent_bonds", 0)
+                self.owned_characters = data.get("owned_characters", ["Torcher"])
+                self.selected_character = data.get("selected_character", "Torcher")
+                print("Game loaded successfully from Wild Rails/Settings.json")
+        except FileNotFoundError:
+            print("No save file found, using default values")
+            self.permanent_bonds = 0
+            self.owned_characters = ["Torcher"]
+            self.selected_character = "Torcher"
+        except Exception as e:
+            print(f"Error loading game: {e}")
+            # Use default values on error
+            self.permanent_bonds = 0
+            self.owned_characters = ["Torcher"]
+            self.selected_character = "Torcher"
+    
     def restock_shop(self):
         """Restock the shop with new random characters based on rarity"""
         self.available_characters = []
@@ -433,7 +495,7 @@ class Game:
     def reset_game(self):
         """Reset game state for a new game"""
         self.wave = 1
-        self.bonds = 0
+        self.match_bonds = 0  # Reset match bonds but keep permanent bonds
         self.zombies_per_wave = 5
         self.zombies_spawned = 0
         self.spawn_timer = 0
@@ -523,6 +585,9 @@ class Game:
                         vel_x, vel_y, True, character["damage"]
                     ])
                 
+                # Play shoot sound
+                self.shoot_sound.play()
+                
                 self.attack_cooldown = self.max_cooldown
     
     def update(self):
@@ -592,7 +657,7 @@ class Game:
             
             # Remove dead zombies and award bonds
             if zombie[2] <= 0:
-                self.bonds += BONDS_PER_ZOMBIE  # Add bonds when zombie is killed
+                self.match_bonds += BONDS_PER_ZOMBIE  # Add bonds when zombie is killed
                 self.zombies.remove(zombie)
                 continue
             
@@ -631,13 +696,26 @@ class Game:
             ("Press S to Shop", self.font, 100),
             ("Press ESC to Quit", self.font, 150),
             ("Survive endless waves of zombies!", self.font, 250),
-            ("Earn Bonds for each zombie killed", self.font, 300)
+            ("Earn Bonds for each zombie killed", self.font, 300),
+            (f"Inventory: {len(self.owned_characters)}/{MAX_INVENTORY} Characters", self.font, 350)
         ]
         
         for text, font, y_offset in texts:
             surf = font.render(text, True, COLORS['black'])
             rect = surf.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2 + y_offset))
             self.screen.blit(surf, rect)
+        
+        # Draw save button
+        pygame.draw.rect(self.screen, COLORS['green'], self.save_button_rect, border_radius=5)
+        save_text = self.font.render("Save Game (K)", True, COLORS['white'])
+        save_text_rect = save_text.get_rect(center=self.save_button_rect.center)
+        self.screen.blit(save_text, save_text_rect)
+        
+        # Draw load button
+        pygame.draw.rect(self.screen, COLORS['blue'], self.load_button_rect, border_radius=5)
+        load_text = self.font.render("Load Game (L)", True, COLORS['white'])
+        load_text_rect = load_text.get_rect(center=self.load_button_rect.center)
+        self.screen.blit(load_text, load_text_rect)
     
     def draw_game(self):
         """Draw the main gameplay screen"""
@@ -665,7 +743,8 @@ class Game:
         # Draw UI
         texts = [
             (f"Wave: {self.wave}", COLORS['black']),
-            (f"Bonds: {self.bonds}", COLORS['gold']),
+            (f"Match Bonds: {self.match_bonds}", COLORS['gold']),
+            (f"Total Bonds: {self.permanent_bonds + self.match_bonds}", COLORS['gold']),
             (f"Zombies: {len(self.zombies)}", COLORS['black']),
             (f"Character: {self.selected_character}", COLORS['black']),
             (f"{'READY TO FIRE' if self.attack_cooldown <= 0 else f'Cooldown: {self.attack_cooldown/60:.1f}s'}", 
@@ -685,10 +764,14 @@ class Game:
     
     def draw_game_over(self):
         """Draw the game over screen with statistics"""
+        # Add match bonds to permanent bonds when game over
+        self.permanent_bonds += self.match_bonds
+        
         texts = [
             ("GAME OVER", self.big_font, COLORS['red'], -100),
-            (f"Wave Reached: {self.wave}", self.font, COLORS['black'], 0),
-            (f"Bonds Earned: {self.bonds}", self.font, COLORS['gold'], 50),
+            (f"Wave Reached: {self.wave}", self.font, COLORS['black'], -50),
+            (f"Bonds Earned This Run: {self.match_bonds}", self.font, COLORS['gold'], 0),
+            (f"Total Bonds: {self.permanent_bonds}", self.font, COLORS['gold'], 50),
             ("Press SPACE to return to Menu", self.font, COLORS['black'], 150),
             ("Press ESC to Quit", self.font, COLORS['black'], 200)
         ]
@@ -705,25 +788,35 @@ class Game:
         title_rect = title.get_rect(center=(SCREEN_WIDTH//2, 80))
         self.screen.blit(title, title_rect)
         
-        # Display current bonds
-        bonds_text = self.font.render(f"Your Bonds: {self.bonds}", True, COLORS['gold'])
-        self.screen.blit(bonds_text, (SCREEN_WIDTH//2 - 100, 150))
+        # Display current bonds and inventory space
+        bonds_text = self.font.render(f"Your Bonds: {self.permanent_bonds}", True, COLORS['gold'])
+        self.screen.blit(bonds_text, (SCREEN_WIDTH//2 - 100, 130))
+        
+        inventory_text = self.font.render(f"Inventory: {len(self.owned_characters)}/{MAX_INVENTORY} Characters", 
+                                       True, COLORS['black'])
+        self.screen.blit(inventory_text, (SCREEN_WIDTH//2 - 100, 170))
         
         # Display restock timer
         restock_minutes = (self.restock_interval - self.restock_timer) // (60 * FPS)
         restock_seconds = ((self.restock_interval - self.restock_timer) % (60 * FPS)) // FPS
         timer_text = self.font.render(f"Restock in: {restock_minutes}:{restock_seconds:02d}", True, COLORS['black'])
-        self.screen.blit(timer_text, (SCREEN_WIDTH//2 - 100, 190))
+        self.screen.blit(timer_text, (SCREEN_WIDTH//2 - 100, 210))
         
         # Shop instructions
         instruction = self.font.render("Press ESC to return to menu", True, COLORS['black'])
         self.screen.blit(instruction, (SCREEN_WIDTH//2 - 150, SCREEN_HEIGHT - 50))
+        
+        mouse_tip = self.font.render("Click on character to buy", True, COLORS['black'])
+        self.screen.blit(mouse_tip, (SCREEN_WIDTH//2 - 150, SCREEN_HEIGHT - 20))
+        
         character_spacing = 250
+        
+        # Reset clickable areas
+        self.shop_clickable_areas = {}
         
         # Display owned characters section
         owned_title = self.font.render("Your Characters:", True, COLORS['black'])
         self.screen.blit(owned_title, (50, 230))
-        
         for i, char_id in enumerate(self.owned_characters):
             char_data = CHARACTERS[char_id]
             x_pos = 50 + (i % 3) * character_spacing  # Show 3 per row
@@ -732,9 +825,24 @@ class Game:
             # Draw character card background based on rarity
             rarity = char_data["rarity"]
             rarity_color = RARITIES[rarity]["color"]
-            pygame.draw.rect(self.screen, rarity_color, 
-                           (x_pos - 10, y_pos - 10, 220, 180), 
-                           border_radius=5)
+            
+            # Define the character card rectangle
+            card_rect = pygame.Rect(x_pos - 10, y_pos - 10, 220, 180)
+            
+            # Store the clickable area for selection
+            self.shop_clickable_areas[f"owned_{i}"] = {
+                "rect": card_rect,
+                "type": "select",
+                "character": char_id
+            }
+            
+            # Highlight if this is the character being hovered
+            if self.shop_hover == f"owned_{i}":
+                pygame.draw.rect(self.screen, (220, 220, 220), 
+                               (x_pos - 15, y_pos - 15, 230, 190), 
+                               border_radius=7)
+            
+            pygame.draw.rect(self.screen, rarity_color, card_rect, border_radius=5)
             pygame.draw.rect(self.screen, COLORS['white'], 
                            (x_pos - 5, y_pos - 5, 210, 170), 
                            border_radius=3)
@@ -758,8 +866,27 @@ class Game:
                 selected_text = self.font.render("SELECTED", True, COLORS['green'])
                 self.screen.blit(selected_text, (x_pos + 70, y_pos + 100))
             else:
-                select_text = self.font.render(f"Press {i+1} to Select", True, COLORS['black'])
+                select_text = self.font.render("Click to Select", True, COLORS['black'])
                 self.screen.blit(select_text, (x_pos + 70, y_pos + 100))
+            
+            # Show sell button (don't allow selling the only character or the selected character)
+            if len(self.owned_characters) > 1 and char_id != self.selected_character:
+                # Calculate sell price (50% of purchase price)
+                sell_price = CHARACTERS[char_id]["price"] // 2
+                
+                # Store the clickable area for selling
+                sell_rect = pygame.Rect(x_pos + 70, y_pos + 130, 140, 30)
+                self.shop_clickable_areas[f"sell_{i}"] = {
+                    "rect": sell_rect,
+                    "type": "sell",
+                    "character": char_id,
+                    "price": sell_price
+                }
+                
+                # Draw sell button
+                pygame.draw.rect(self.screen, COLORS['red'], sell_rect, border_radius=3)
+                sell_text = self.font.render(f"Sell for {sell_price}", True, COLORS['white'])
+                self.screen.blit(sell_text, (x_pos + 75, y_pos + 135))
         
         # Display available characters for purchase (only from restock)
         if self.available_characters:
@@ -774,9 +901,32 @@ class Game:
                 # Draw character card background based on rarity
                 rarity = char_data["rarity"]
                 rarity_color = RARITIES[rarity]["color"]
-                pygame.draw.rect(self.screen, rarity_color, 
-                               (x_pos - 10, y_pos - 10, 220, 180), 
-                               border_radius=5)
+                
+                # Check if player can afford this character and has inventory space
+                can_afford = self.permanent_bonds >= char_data['price']
+                has_space = len(self.owned_characters) < MAX_INVENTORY
+                can_buy = can_afford and has_space
+                
+                # Define the character card rectangle
+                card_rect = pygame.Rect(x_pos - 10, y_pos - 10, 220, 180)
+                
+                # Store the clickable area for purchase
+                self.shop_clickable_areas[f"available_{i}"] = {
+                    "rect": card_rect,
+                    "type": "buy",
+                    "character": char_id,
+                    "can_afford": can_afford,
+                    "has_space": has_space
+                }
+                
+                # Highlight if this is the character being hovered
+                if self.shop_hover == f"available_{i}":
+                    highlight_color = COLORS['green'] if can_buy else COLORS['red']
+                    pygame.draw.rect(self.screen, highlight_color, 
+                                   (x_pos - 15, y_pos - 15, 230, 190), 
+                                   border_radius=7)
+                
+                pygame.draw.rect(self.screen, rarity_color, card_rect, border_radius=5)
                 pygame.draw.rect(self.screen, COLORS['white'], 
                                (x_pos - 5, y_pos - 5, 210, 170), 
                                border_radius=3)
@@ -800,10 +950,17 @@ class Game:
                 self.screen.blit(price_text, (x_pos + 70, y_pos + 100))
                 
                 # Show buy button
-                can_afford = self.bonds >= char_data['price']
-                buy_text = self.font.render(f"Press {i+len(self.owned_characters)+1} to Buy", True, 
-                                         COLORS['green'] if can_afford else COLORS['red'])
+                buy_text = self.font.render("Click to Buy", True, 
+                                         COLORS['green'] if can_buy else COLORS['red'])
                 self.screen.blit(buy_text, (x_pos + 70, y_pos + 130))
+                
+                # Add feedback messages
+                if not can_afford:
+                    insufficient_text = self.font.render("Not enough bonds!", True, COLORS['red'])
+                    self.screen.blit(insufficient_text, (x_pos + 70, y_pos + 150))
+                elif not has_space:
+                    full_text = self.font.render("Inventory full!", True, COLORS['red'])
+                    self.screen.blit(full_text, (x_pos + 70, y_pos + 150))
         else:
             no_stock_text = self.font.render("No characters available. Wait for restock.", True, COLORS['red'])
             self.screen.blit(no_stock_text, (SCREEN_WIDTH//2 - 180, 540))
@@ -830,13 +987,88 @@ class Game:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.running = False
+                
+                # Handle mouse movement for hover effects in shop
+                elif event.type == pygame.MOUSEMOTION and self.state == "shop":
+                    mouse_pos = pygame.mouse.get_pos()
+                    self.shop_hover = None
+                    
+                    # Check if mouse is over any clickable area
+                    for area_id, area_data in self.shop_clickable_areas.items():
+                        if area_data["rect"].collidepoint(mouse_pos):
+                            self.shop_hover = area_id
+                            break
+                
+                # Handle mouse clicks in menu (for save/load buttons)
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and self.state == "menu":
+                    mouse_pos = pygame.mouse.get_pos()
+                    if self.save_button_rect.collidepoint(mouse_pos):
+                        if self.save_game():
+                            print("Game saved successfully!")
+                    elif self.load_button_rect.collidepoint(mouse_pos):
+                        self.load_game()
+                        print("Game loaded successfully!")
+                        # Update player image after loading
+                        self.player_img = self.character_imgs[self.selected_character]
+                
+                # Handle mouse clicks in shop
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and self.state == "shop":
+                    mouse_pos = pygame.mouse.get_pos()
+                    
+                    # Check if any clickable area was clicked
+                    for area_id, area_data in self.shop_clickable_areas.items():
+                        if area_data["rect"].collidepoint(mouse_pos):
+                            if area_data["type"] == "select":
+                                # Select owned character
+                                self.selected_character = area_data["character"]
+                                self.player_img = self.character_imgs[self.selected_character]
+                                print(f"Selected character: {self.selected_character}")
+                            
+                            elif area_data["type"] == "buy" and area_data["can_afford"] and area_data["has_space"]:
+                                # Buy new character
+                                char_id = area_data["character"]
+                                char_price = CHARACTERS[char_id]["price"]
+                                
+                                self.permanent_bonds -= char_price
+                                self.owned_characters.append(char_id)
+                                self.available_characters.remove(char_id)
+                                self.selected_character = char_id
+                                self.player_img = self.character_imgs[char_id]
+                                print(f"Purchased character: {char_id}")
+                                
+                                # Auto-save after purchase
+                                self.save_game()
+                            
+                            elif area_data["type"] == "sell":
+                                # Sell character
+                                char_id = area_data["character"]
+                                sell_price = area_data["price"]
+                                
+                                # Remove from owned characters and add bonds
+                                self.owned_characters.remove(char_id)
+                                self.permanent_bonds += sell_price
+                                print(f"Sold character {char_id} for {sell_price} bonds")
+                                
+                                # Auto-save after selling
+                                self.save_game()
+                            break
+                
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         if self.state == "playing":
+                            # Add match bonds to permanent bonds when returning to menu
+                            self.permanent_bonds += self.match_bonds
+                            self.match_bonds = 0
                             self.state = "menu"
+                            # Auto-save when returning to menu
+                            self.save_game()
                         elif self.state == "shop":
                             self.state = "menu"
+                            # Auto-save when leaving shop
+                            self.save_game()
                         else:
+                            # Auto-save before quitting
+                            self.save_game()
                             self.running = False
                     elif event.key == pygame.K_SPACE:
                         if self.state == "menu":
@@ -847,55 +1079,79 @@ class Game:
                             self.shoot()
                     elif event.key == pygame.K_s and self.state == "menu":
                         self.state = "shop"
+                    elif event.key == pygame.K_k and self.state == "menu":
+                        # Save game with K key
+                        self.save_game()
+                    elif event.key == pygame.K_l and self.state == "menu":
+                        # Load game with L key
+                        self.load_game()
+                        # Update player image after loading
+                        self.player_img = self.character_imgs[self.selected_character]
                         
-                    # Handle shop interactions
+                    # Handle shop interactions with keyboard
+                    if self.state == "shop":
                         if event.key in [pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4, pygame.K_5, pygame.K_6, pygame.K_7, pygame.K_8, pygame.K_9]:
                             # Convert key to index (K_1 -> 0, K_2 -> 1, etc.)
                             char_index = event.key - pygame.K_1
                             
-                            # Handle owned characters selection (for selection)
+                            # Only use number keys for selecting owned characters
                             if char_index < len(self.owned_characters):
                                 char_id = self.owned_characters[char_index]
                                 self.selected_character = char_id
                                 self.player_img = self.character_imgs[char_id]
                                 print(f"Selected character: {char_id}")
-                            
-                            # Handle available characters (for purchase)
-                            elif char_index - len(self.owned_characters) < len(self.available_characters):
-                                available_index = char_index - len(self.owned_characters)
-                                char_id = self.available_characters[available_index]
-                                
-                                # Try to purchase
-                                char_price = CHARACTERS[char_id]["price"]
-                                if self.bonds >= char_price:
-                                    self.bonds -= char_price
-                                    self.owned_characters.append(char_id)
-                                    self.available_characters.remove(char_id)
-                                    self.selected_character = char_id
-                                    self.player_img = self.character_imgs[char_id]
-                                    print(f"Purchased character: {char_id}")
-                                else:
-                                    print(f"Not enough bonds to purchase {char_id}")
             
             self.update()
             self.draw()
             self.clock.tick(FPS)
         
+        # Stop music before quitting
+        pygame.mixer.quit()
         pygame.quit()
         sys.exit()
 
 if __name__ == "__main__":
-    print("Wild Rails - Zombie Survival")
-    print("=" * 30)
-    print("Controls:")
-    print("- WASD: Move character")
-    print("- SPACE: Shoot projectile at mouse cursor")
-    print("- S: Open shop from main menu")
-    print("- ESC: Return to menu/Quit")
-    print("\nObjective: Survive endless waves and collect Bonds!")
-    print("Special characters:")
-    print("- Torcher: Default character")
-    print("- Cowboy: Costs 25 Bonds, shoots two projectiles at once with double damage")
+    # Print emoji instructions for copying
+    emoji_instructions = """
+🎮 Wild Rails - Zombie Survival 🧟
+================================
+
+📋 Controls:
+🎯 WASD: Move character
+🔫 SPACE: Shoot at mouse cursor
+🛍️ S: Open shop from menu
+💾 L: Load saved game
+💾 K: Save game
+❌ ESC: Return to menu/Quit
+
+🎯 Objective: 
+Survive endless waves and collect Bonds! 💰
+
+⭐ Characters:
+🔥 Torcher: Default character
+🤠 Cowboy: 25 Bonds, higher damage
+🔫 Shotgunner: 50 Bonds, epic damage
+🧟 Mummy: 50 Bonds, epic damage
+🐎 Horse: 100 Bonds, legendary damage
+🧛 Vampire: 100 Bonds, melee attacks
+🐺 Werewolf: 200 Bonds, AOE damage
+⚡ Tesla: 500 Bonds, highest damage
+
+💎 Rarities:
+⚪ Common: 40% chance
+🔷 Rare: 30% chance
+🟣 Epic: 15% chance
+🟡 Legendary: 10% chance
+🔮 Mythic: 4% chance
+✨ Godly: 1% chance
+
+💰 Shop System:
+- Shows 2 random characters
+- Restocks every 5 minutes
+- Max 4 characters in inventory
+- Can sell characters for bonds
+"""
+    print(emoji_instructions)
     print("Starting game...")
     
     Game().run()
